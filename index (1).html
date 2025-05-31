@@ -74,7 +74,7 @@
       const fetchElectionData = async () => {
         try {
           // Replace with your Google Sheet CSV link
-          const csvUrl = 'YOUR_GOOGLE_SHEET_CSV_LINK_HERE'; // e.g., https://docs.google.com/spreadsheets/d/.../pub?output=csv
+          const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQKl38MM3h1Aye-TW-qnATJ3BmHrtoiZkeUXu3VRljvLuL_KAB2TA7o1Q2X5tiFT1s6itQWDIoF0se_/pub?gid=0&single=true&output=csv';
           const response = await fetch(csvUrl);
           const csvText = await response.text();
 
