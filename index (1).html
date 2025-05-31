@@ -1,217 +1,168 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!-- Setting up the HTML structure with necessary CDN scripts -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>USA Presidential Election Map</title>
-  <!-- Loading PropTypes for React component validation -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
-  <!-- Loading React and ReactDOM for the app -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <!-- Loading Babel for JSX transformation -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <!-- Loading PapaParse for CSV parsing -->
-  <script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
-  <!-- Loading D3.js for map rendering -->
-  <script src="https://d3js.org/d3.v7.min.js"></script>
-  <!-- Loading Tailwind CSS for styling -->
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100">
-  <!-- Defining the root element for React -->
-  <div id="root" class="container mx-auto p-4"></div>
-
-  <!-- Writing the React app with JSX -->
-  <script type="text/babel">
-    // Creating the main ElectionMap component
-    const ElectionMap = () => {
-      // Setting up state for election data and loading status
-      const [electionData, setElectionData] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-
-      // Fetching and parsing CSV data from Google Sheet
-      const fetchElectionData = async () => {
-        try {
-          // Replace with your Google Sheet CSV link
-          const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQKl38MM3h1Aye-TW-qnATJ3BmHrtoiZkeUXu3VRljvLuL_KAB2TA7o1Q2X5tiFT1s6itQWDIoF0se_/pub?gid=0&single=true&output=csv';
-          const response = await fetch(csvUrl);
-          const csvText = await response.text();
-
-          // Parsing CSV with PapaParse
-          Papa.parse(csvText, {
-            header: true,
-            skipEmptyLines: true,
-            transformHeader: (header) => header.trim().replace(/^"|"$/g, ''),
-            transform: (value, header) => {
-              let cleaned = value.trim().replace(/^"|"$/g, '');
-              if (header === 'REPUBLICAN VOTE SHARE' || header === 'DEMOCRAT VOTE SHARE') {
-                return parseFloat(cleaned) || 0;
-              }
-              return cleaned;
-            },
-            complete: (results) => {
-              const cleanedData = results.data.map(row => ({
-                state: row['STATES'],
-                abbreviation: row['ABBREVIATIONS'],
-                winner: row['WINNER'],
-                republicanShare: parseFloat(row['REPUBLICAN VOTE SHARE']) || 0,
-                democratShare: parseFloat(row['DEMOCRAT VOTE SHARE']) || 0,
-                electoralVotes: parseInt(row['ELECTORAL VOTES']) || 0
-              })).filter(row => row.state && row.abbreviation && row.winner);
-              setElectionData(cleanedData);
-              setLoading(false);
-            },
-            error: (err) => {
-              console.error('Error parsing CSV:', err);
-              setLoading(false);
-            }
-          });
-        } catch (error) {
-          console.error('Error fetching CSV:', error);
-          setLoading(false);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live USA Presidential Election Map</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
         }
-      };
-
-      // Fetching data on mount and every 30 seconds
-      React.useEffect(() => {
-        fetchElectionData();
-        const interval = setInterval(fetchElectionData, 30000);
-        return () => clearInterval(interval);
-      }, []);
-
-      // Setting up the SVG map with D3.js
-      React.useEffect(() => {
-        if (electionData.length === 0) return;
-
-        // Initializing D3 map
+        #map {
+            max-width: 960px;
+            margin: 0 auto;
+        }
+        .state {
+            stroke: #fff;
+            stroke-width: 0.5;
+        }
+        .republican {
+            fill: #ff0000;
+        }
+        .democrat {
+            fill: #0000ff;
+        }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+        }
+        #legend {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .legend-box {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="legend">
+        <span><span class="legend-box republican"></span>Republican</span>
+        <span style="margin-left: 20px;"><span class="legend-box democrat"></span>Democrat</span>
+    </div>
+    <script>
+        // Setting up SVG dimensions
         const width = 960;
         const height = 600;
-        const svg = d3.select('#election-map')
-          .attr('width', width)
-          .attr('height', height);
+        const svg = d3.select("#map")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height);
 
-        // Clearing previous map content
-        svg.selectAll('*').remove();
-
-        // Setting up Albers USA projection
+        // Defining map projection
         const projection = d3.geoAlbersUsa()
-          .scale(1280)
-          .translate([width / 2, height / 2]);
-
+            .scale(1300)
+            .translate([width / 2, height / 2]);
         const path = d3.geoPath().projection(projection);
 
-        // Loading GeoJSON for US states
-        d3.json('https://d3js.org/us-10m.v2.json').then(us => {
-          // Mapping state abbreviations to election data
-          const dataMap = new Map(electionData.map(d => [d.abbreviation, d]));
+        // Creating tooltip
+        const tooltip = d3.select("body")
+            .append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
 
-          // Drawing states
-          svg.append('g')
-            .selectAll('path')
-            .data(topojson.feature(us, us.objects.states).features)
-            .enter()
-            .append('path')
-            .attr('d', path)
-            .attr('fill', d => {
-              const stateData = dataMap.get(d.properties.postal);
-              if (!stateData) return '#ccc';
-              return stateData.winner === 'Jay Rockefeller' ? '#ef4444' : '#3b82f6';
-            })
-            .attr('stroke', '#fff')
-            .attr('stroke-width', 1)
-            .on('mouseover', function (event, d) {
-              d3.select(this).attr('fill-opacity', 0.7);
-              const stateData = dataMap.get(d.properties.postal);
-              if (stateData) {
-                const tooltip = d3.select('#tooltip');
-                tooltip.style('opacity', 1)
-                  .html(`
-                    <div class="bg-white p-2 border rounded shadow">
-                      <strong>${stateData.state}</strong><br>
-                      Winner: ${stateData.winner}<br>
-                      Electoral Votes: ${stateData.electoralVotes}<br>
-                      Republican: ${(stateData.republicanShare * 100).toFixed(1)}%<br>
-                      Democrat: ${(stateData.democratShare * 100).toFixed(1)}%
-                    </div>
-                  `)
-                  .style('left', (event.pageX + 10) + 'px')
-                  .style('top', (event.pageY - 10) + 'px');
-              }
-            })
-            .on('mouseout', function () {
-              d3.select(this).attr('fill-opacity', 1);
-              d3.select('#tooltip').style('opacity', 0);
-            })
-            .on('click', (event, d) => {
-              const stateData = dataMap.get(d.properties.postal);
-              if (stateData) {
-                alert(`State: ${stateData.state}\nWinner: ${stateData.winner}\nElectoral Votes: ${stateData.electoralVotes}`);
-              }
-            });
+        // State abbreviation to name mapping
+        const stateNames = {
+            "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+            "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+            "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+            "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+            "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri",
+            "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+            "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio",
+            "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+            "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
+            "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+            "DC": "District of Columbia"
+        };
+
+        // Loading US map data
+        d3.json("https://d3js.org/us-10m.v2.json").then(function(us) {
+            // Drawing the map
+            svg.append("g")
+                .selectAll("path")
+                .data(topojson.feature(us, us.objects.states).features)
+                .enter()
+                .append("path")
+                .attr("class", "state")
+                .attr("d", path);
+
+            // Function to fetch and update map data
+            function updateMap() {
+                fetch("https://docs.google.com/spreadsheets/d/e/2PACX-1vQKl38MM3h1Aye-TW-qnATJ3BmHrtoiZkeUXu3VRljvLuL_KAB2TA7o1Q2X5tiFT1s6itQWDIoF0se_/pub?gid=0&single=true&output=csv")
+                    .then(response => response.text())
+                    .then(csv => {
+                        Papa.parse(csv, {
+                            header: true,
+                            skipEmptyLines: true,
+                            transformHeader: header => header.trim().replace(/^"|"$/g, ''),
+                            transform: (value, header) => value.trim().replace(/^"|"$/g, ''),
+                            complete: function(results) {
+                                const data = results.data;
+                                svg.selectAll(".state")
+                                    .data(topojson.feature(us, us.objects.states).features)
+                                    .attr("class", function(d) {
+                                        const stateAbbr = stateNames[d.properties.name.toUpperCase()] ? 
+                                            Object.keys(stateNames).find(key => stateNames[key] === d.properties.name) : "";
+                                        const stateData = data.find(row => row["ABBREVIATIONS"] === stateAbbr);
+                                        if (stateData) {
+                                            return `state ${stateData["WINNER"] === "Jay Rockefeller" ? "republican" : "democrat"}`;
+                                        }
+                                        return "state";
+                                    })
+                                    .on("mouseover", function(event, d) {
+                                        const stateAbbr = stateNames[d.properties.name.toUpperCase()] ? 
+                                            Object.keys(stateNames).find(key => stateNames[key] === d.properties.name) : "";
+                                        const stateData = data.find(row => row["ABBREVIATIONS"] === stateAbbr);
+                                        if (stateData) {
+                                            tooltip.transition()
+                                                .duration(200)
+                                                .style("opacity", 0.9);
+                                            tooltip.html(`
+                                                <strong>${d.properties.name}</strong><br>
+                                                Winner: ${stateData["WINNER"]}<br>
+                                                Electoral Votes: ${stateData["ELECTORAL VOTES"]}<br>
+                                                GOP Votes: ${parseFloat(stateData["GOP VOTES"]).toLocaleString()}<br>
+                                                DNC Votes: ${parseFloat(stateData["DNC VOTES"]).toLocaleString()}
+                                            `)
+                                                .style("left", (event.pageX + 10) + "px")
+                                                .style("top", (event.pageY - 28) + "px");
+                                        }
+                                    })
+                                    .on("mouseout", function() {
+                                        tooltip.transition()
+                                            .duration(500)
+                                            .style("opacity", 0);
+                                    });
+                            },
+                            error: err => console.error("Error parsing CSV:", err)
+                        });
+                    })
+                    .catch(err => console.error("Error fetching CSV:", err));
+            }
+
+            // Initial map update
+            updateMap();
+
+            // Polling for updates every 30 seconds
+            setInterval(updateMap, 30000);
         });
-      }, [electionData]);
-
-      // Rendering the component
-      return (
-        <div className="text-center">
-          <h1 className="text-3xl font-bold mb-4">1984 USA Presidential Election Map</h1>
-          {loading ? (
-            <p className="text-lg">Loading election data...</p>
-          ) : (
-            <>
-              <svg id="election-map" className="mx-auto"></svg>
-              <div id="tooltip" className="absolute pointer-events-none" style={{ opacity: 0 }}></div>
-              <p className="mt-4 text-sm">Red: Republican (Jay Rockefeller), Blue: Democrat</p>
-            </>
-          )}
-        </div>
-      );
-    };
-
-    // Rendering the app using createRoot
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<ElectionMap />);
-  </script>
+    </script>
 </body>
 </html>
